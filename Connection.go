@@ -8,16 +8,17 @@ import (
 )
 
 type Connection struct {
-	connection         *amqp.Connection
-	serverIp           string
-	port               int
-	userName           string
-	password           string
-	reconnectInterval  time.Duration
-	IsConnected        bool
-	ConnectionStatus   chan bool
-	disconnectChannel  chan bool
-	selfDisconnectChan <-chan *amqp.Error
+	connection                      *amqp.Connection
+	serverIp                        string
+	port                            int
+	userName                        string
+	password                        string
+	reconnectInterval               time.Duration
+	IsConnected                     bool
+	ConnectionStatus                chan bool
+	disconnectChannel               chan bool
+	connectionErrorChan             chan *amqp.Error
+	registeredDisconnectionChannels []chan bool
 }
 
 /*
@@ -35,13 +36,20 @@ type Connection struct {
 */
 func NewConnection(ip string, port int, user string, pass string, reconnectInterval time.Duration) *Connection {
 	var connection = Connection{
-		serverIp:          ip,
-		port:              port,
-		userName:          user,
-		password:          pass,
-		reconnectInterval: reconnectInterval,
-		IsConnected:       false,
+		serverIp:            ip,
+		port:                port,
+		userName:            user,
+		password:            pass,
+		reconnectInterval:   reconnectInterval,
+		IsConnected:         false,
+		ConnectionStatus:    make(chan bool),
+		disconnectChannel:   make(chan bool),
+		connectionErrorChan: make(chan *amqp.Error),
 	}
+
+	// Register myself for manual disconnection reports
+	// So I'll know when to stop the watchdog when it meant to be.
+	connection.NotifyManualDisconnection(connection.disconnectChannel)
 
 	// Start connection watchdog
 	connection.ConnectionWatchdog()
@@ -61,7 +69,7 @@ func NewConnection(ip string, port int, user string, pass string, reconnectInter
 	When the connection done successfully - The method will update the connection status channel -
 	so everyone will be able to handle the new connection.
 */
-func (connection *Connection) Connect() bool {
+func (connection *Connection) connect() bool {
 	if connection.IsConnected {
 		return true
 	}
@@ -96,8 +104,8 @@ func (connection *Connection) Connect() bool {
 	Notice! If there is a deadlock situation - meaning it will never success to connect,
 	the method will run forever. It is on your responsibility.
 */
-func (connection *Connection) ReliableConnect() {
-	for !connection.IsConnected && !connection.Connect() {
+func (connection *Connection) reliableConnect() {
+	for !connection.IsConnected && !connection.connect() {
 		// Connection failed! wait and try again
 		time.Sleep(connection.reconnectInterval)
 	}
@@ -106,16 +114,22 @@ func (connection *Connection) ReliableConnect() {
 /*
 	Watchdog for the connection.
 	Waiting for reports on disconnected connection and try to reconnect
-	by the method ReliableConnect on a different goroutine.
+	by the method reliableConnect on a different goroutine.
 	It will stop only when the client gave a signal by "disconnectChannel" channel.
+
+	We rely only on the SteadyWay's amqp for disconnection signals.
+	If their is a failure in a different object, we will wait for this signal
+	and won't act our-self.
 */
 func (connection *Connection) ConnectionWatchdog() {
+	connection.connection.NotifyClose(connection.connectionErrorChan)
+
 	for {
 		select {
-		case err := <-connection.selfDisconnectChan:
+		case err := <-connection.connectionErrorChan:
 			glog.Error("Disconnected from RabbitMQ. Trying to reconnect. Error: %v", err)
 			connection.ConnectionStatus <- false
-			connection.ReliableConnect()
+			connection.reliableConnect()
 		case <-connection.disconnectChannel:
 			connection.Disconnect()
 			glog.Info("The connection mark as disconnected. Stop trying to reconnect it")
@@ -126,7 +140,8 @@ func (connection *Connection) ConnectionWatchdog() {
 
 /*
 	Closing the RabbitMQ's connection.
-	Update the disconnect channel so the watchdog will know to stop (and avoid the reconnect).
+	Update all registered consumers for manual disconnection report - so they will know
+	when to stop watchdog the connection.
 	This method will be called ONLY when the client want to disconnect.
 */
 func (connection *Connection) Disconnect() {
@@ -138,5 +153,17 @@ func (connection *Connection) Disconnect() {
 
 	_ = connection.connection.Close()
 
-	connection.disconnectChannel <- true
+	for _, channel := range connection.registeredDisconnectionChannels {
+		channel <- true
+	}
+}
+
+/*
+	Register a channel to manual disconnection reports.
+	When the user will want to disconnect from RabbitMQ,
+	he will close only 	the connection struct and it will report the others
+	to stop the watchdog.
+*/
+func (connection *Connection) NotifyManualDisconnection(notifyChannel chan bool) {
+	connection.registeredDisconnectionChannels = append(connection.registeredDisconnectionChannels, notifyChannel)
 }
