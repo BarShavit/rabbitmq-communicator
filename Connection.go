@@ -108,38 +108,19 @@ func (connection *Connection) ReliableConnect() {
 	Waiting for reports on disconnected connection and try to reconnect
 	by the method ReliableConnect on a different goroutine.
 	It will stop only when the client gave a signal by "disconnectChannel" channel.
-
-	Also, it will start an inner watchdog, looking for disconnect reports
-	from the RabbitMQ's connection it's self.
-	When a report like this happen, handle it as a regular disconnect report.
 */
 func (connection *Connection) ConnectionWatchdog() {
-	// Start the self disconnect report watchdog
-	go connection.watchForSelfDisconnectReport()
-
 	for {
 		select {
-		case status := <-connection.ConnectionStatus:
-			if !status {
-				go connection.ReliableConnect()
-			}
+		case err := <-connection.selfDisconnectChan:
+			glog.Error("Disconnected from RabbitMQ. Trying to reconnect. Error: %v", err)
+			connection.ConnectionStatus <- false
+			connection.ReliableConnect()
 		case <-connection.disconnectChannel:
 			connection.Disconnect()
 			glog.Info("The connection mark as disconnected. Stop trying to reconnect it")
 			return
 		}
-	}
-}
-
-/*
-	This method will wait till it will receive a disconnection report
-	from RabbitMQ's it self. When it happens, it will convert it to the normal
-	channel status channel, and by that will try to reconnect (if needed).
-*/
-func (connection *Connection) watchForSelfDisconnectReport() {
-	for err := range connection.selfDisconnectChan {
-		glog.Warning("RabbitMQ reported on disconnecting. %v", err)
-		connection.ConnectionStatus <- false
 	}
 }
 
