@@ -15,7 +15,7 @@ type Connection struct {
 	password                        string
 	reconnectInterval               time.Duration
 	IsConnected                     bool
-	ConnectionStatus                chan bool
+	ConnectionStatus                []chan bool
 	disconnectChannel               chan bool
 	connectionErrorChan             chan *amqp.Error
 	registeredDisconnectionChannels []chan bool
@@ -42,7 +42,6 @@ func NewConnection(ip string, port int, user string, pass string, reconnectInter
 		password:            pass,
 		reconnectInterval:   reconnectInterval,
 		IsConnected:         false,
-		ConnectionStatus:    make(chan bool),
 		disconnectChannel:   make(chan bool),
 		connectionErrorChan: make(chan *amqp.Error),
 	}
@@ -51,11 +50,10 @@ func NewConnection(ip string, port int, user string, pass string, reconnectInter
 	// So I'll know when to stop the watchdog when it meant to be.
 	connection.NotifyManualDisconnection(connection.disconnectChannel)
 
+	go connection.reliableConnect()
+
 	// Start connection watchdog
 	connection.ConnectionWatchdog()
-
-	// Push a "disconnect" message, so the watchdog will be able to do the first connect
-	connection.ConnectionStatus <- false
 
 	return &connection
 }
@@ -91,7 +89,7 @@ func (connection *Connection) connect() bool {
 
 	// Update the clients
 	connection.IsConnected = true
-	connection.ConnectionStatus <- true
+	connection.UpdateConnectionUpdate(true)
 
 	return true
 }
@@ -128,7 +126,7 @@ func (connection *Connection) ConnectionWatchdog() {
 		select {
 		case err := <-connection.connectionErrorChan:
 			glog.Error("Disconnected from RabbitMQ. Trying to reconnect. Error: %v", err)
-			connection.ConnectionStatus <- false
+			connection.UpdateConnectionUpdate(false)
 			connection.reliableConnect()
 		case <-connection.disconnectChannel:
 			connection.Disconnect()
@@ -166,4 +164,20 @@ func (connection *Connection) Disconnect() {
 */
 func (connection *Connection) NotifyManualDisconnection(notifyChannel chan bool) {
 	connection.registeredDisconnectionChannels = append(connection.registeredDisconnectionChannels, notifyChannel)
+}
+
+/*
+	Register for connection change event
+*/
+func (connection *Connection) NotifyConnectionChange(reportChan chan bool) {
+	connection.ConnectionStatus = append(connection.ConnectionStatus, reportChan)
+}
+
+/*
+	Update all the registered clients on connection status change
+*/
+func (connection *Connection) UpdateConnectionUpdate(status bool) {
+	for _, ch := range connection.ConnectionStatus {
+		ch <- status
+	}
 }

@@ -12,6 +12,8 @@ type Channel struct {
 	durationAfterCreationFailure  time.Duration
 	closingReportChan             chan *amqp.Error
 	manualDisconnectionReportChan chan bool
+	ChannelStatus                 chan bool
+	connectionStatusChan          chan bool
 	IsCreated                     bool
 }
 
@@ -30,6 +32,8 @@ func NewChannel(conn Connection, durationAfterFaliure time.Duration) *Channel {
 		nil,
 		durationAfterFaliure,
 		make(chan *amqp.Error),
+		make(chan bool),
+		make(chan bool),
 		make(chan bool),
 		false,
 	}
@@ -72,6 +76,7 @@ func (channel *Channel) createInnerChannel() bool {
 	channel.channel = ch
 
 	channel.IsCreated = true
+	channel.ChannelStatus <- true
 
 	glog.Info("Created a channel.")
 
@@ -110,14 +115,16 @@ func (channel *Channel) reliableCreateChannel() {
 */
 func (channel *Channel) watchChannel() {
 	channel.channel.NotifyClose(channel.closingReportChan)
+	channel.connection.NotifyConnectionChange(channel.connectionStatusChan)
 
 	for {
 		select {
 		case err := <-channel.closingReportChan:
 			glog.Warning("RabbitMQ reported on a channel failure (because disconnection or some other reason). Error %v", err)
 			channel.IsCreated = false
+			channel.ChannelStatus <- false
 			go channel.reliableCreateChannel()
-		case reconnected := <-channel.connection.ConnectionStatus:
+		case reconnected := <-channel.connectionStatusChan:
 			if reconnected {
 				go channel.reliableCreateChannel()
 			}

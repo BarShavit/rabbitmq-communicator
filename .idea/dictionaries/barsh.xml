@@ -2,6 +2,7 @@
   <dictionary name="barsh">
     <words>
       <w>amqp</w>
+      <w>structs</w>
     </words>
   </dictionary>
 </component>
