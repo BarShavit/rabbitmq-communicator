@@ -46,6 +46,9 @@ func NewTopicExchangeSender(exchangeName string, isDurable bool, channel *Channe
 		channelStatusChangeChan:       make(chan bool),
 	}
 
+	go sender.reliableCreateExchange()
+	go sender.watchExchangeDeclaration()
+
 	return &sender
 }
 
@@ -152,9 +155,11 @@ func (exchange *TopicExchangeSender) Send(msg []byte, routingKey string, isPersi
 	)
 
 	if err != nil {
-		glog.Warning("Failed to send message to routing key %s over exchange %s", routingKey, exchange.exchangeName)
+		glog.Warning("Failed to send message to routing key % over exchange ", routingKey, exchange.exchangeName)
 		return false
 	}
+
+	glog.Info("Sent message to exchange ", exchange.exchangeName)
 
 	return true
 }

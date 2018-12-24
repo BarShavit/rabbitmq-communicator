@@ -120,6 +120,12 @@ func (connection *Connection) reliableConnect() {
 	and won't act our-self.
 */
 func (connection *Connection) ConnectionWatchdog() {
+	if connection.connection == nil {
+		time.Sleep(connection.reconnectInterval)
+		go connection.ConnectionWatchdog()
+		return
+	}
+
 	connection.connection.NotifyClose(connection.connectionErrorChan)
 
 	for {

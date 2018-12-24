@@ -9,7 +9,8 @@ import (
 type Receiver struct {
 	channel                       *Channel
 	queue                         amqp.Queue
-	MessagesChannel               <-chan amqp.Delivery
+	innerMessageChannel           <-chan amqp.Delivery
+	MessagesChannel               chan amqp.Delivery
 	exchangeName                  string
 	routingKey                    string
 	isDurable                     bool
@@ -33,11 +34,14 @@ func NewReceiver(channel *Channel, exchangeName string, routingKey string, isDur
 		durationAfterCreationFailure:  durationAfterFailure,
 		manualDisconnectionReportChan: make(chan bool),
 		channelStatusChan:             make(chan bool),
+		MessagesChannel:               make(chan amqp.Delivery),
 		channel:                       channel,
 	}
 
 	// First consume setup
 	go receiver.reliableConsumeSetup()
+
+	go receiver.watchConsumer()
 
 	return &receiver
 }
@@ -96,7 +100,7 @@ func (receiver *Receiver) setupConsumer() bool {
 	}
 
 	glog.Info("Started to consume from exchange %s on routing key %s", receiver.exchangeName, receiver.routingKey)
-	receiver.MessagesChannel = msgs
+	go receiver.convertOutputChannels(msgs)
 
 	return true
 }
@@ -137,5 +141,17 @@ func (receiver *Receiver) watchConsumer() {
 		case <-receiver.manualDisconnectionReportChan:
 			break
 		}
+	}
+}
+
+/*
+	We may create few consumers from AMQP,
+	but we need to give the client always ONE messages channel.
+	This method should be called in a different goroutine each time a new consumer
+	is up, take all the messages from the consumer channel to our one output channel
+*/
+func (receiver *Receiver) convertOutputChannels(newChannel <-chan amqp.Delivery) {
+	for msg := range newChannel {
+		receiver.MessagesChannel <- msg
 	}
 }

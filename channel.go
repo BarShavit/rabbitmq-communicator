@@ -7,13 +7,15 @@ import (
 )
 
 type Channel struct {
-	connection                      Connection
+	connection                      *Connection
 	channel                         *amqp.Channel
 	durationAfterCreationFailure    time.Duration
-	closingReportChan               chan *amqp.Error
+	closingReportAmqpChan           chan *amqp.Error
+	closingReportChan               chan bool
 	manualDisconnectionReportChan   chan bool
 	registeredChansForChannelStatus []chan bool
 	connectionStatusChan            chan bool
+	channelStatusSelfChannel        chan bool
 	IsCreated                       bool
 }
 
@@ -26,14 +28,16 @@ type Channel struct {
 	This method will start the watchdog and register for disconnection reports
 	from teh connection.
 */
-func NewChannel(conn Connection, durationAfterFaliure time.Duration) *Channel {
+func NewChannel(conn *Connection, durationAfterFaliure time.Duration) *Channel {
 	var channel = Channel{
 		conn,
 		nil,
 		durationAfterFaliure,
 		make(chan *amqp.Error),
 		make(chan bool),
+		make(chan bool),
 		[]chan bool{},
+		make(chan bool),
 		make(chan bool),
 		false,
 	}
@@ -96,6 +100,7 @@ func (channel *Channel) reliableCreateChannel() {
 
 	for channel.connection.IsConnected && !channel.IsCreated && !channel.createInnerChannel() {
 		time.Sleep(channel.durationAfterCreationFailure)
+		glog.Info("test")
 	}
 }
 
@@ -114,19 +119,25 @@ func (channel *Channel) reliableCreateChannel() {
 	report to all other structs to close.
 */
 func (channel *Channel) watchChannel() {
-	channel.channel.NotifyClose(channel.closingReportChan)
 	channel.connection.NotifyConnectionChange(channel.connectionStatusChan)
+	channel.NotifyChannelStatus(channel.channelStatusSelfChannel)
 
 	for {
 		select {
-		case err := <-channel.closingReportChan:
-			glog.Warning("RabbitMQ reported on a channel failure (because disconnection or some other reason). Error %v", err)
+		case _ = <-channel.closingReportChan:
 			channel.IsCreated = false
-			channel.UpdateChannelStatus(false)
+			_ = channel.channel.Close()
+			go channel.UpdateChannelStatus(false)
 			go channel.reliableCreateChannel()
 		case reconnected := <-channel.connectionStatusChan:
 			if reconnected {
 				go channel.reliableCreateChannel()
+			}
+		case channelStatus := <-channel.channelStatusSelfChannel:
+			if channelStatus {
+				channel.closingReportAmqpChan = make(chan *amqp.Error)
+				channel.channel.NotifyClose(channel.closingReportAmqpChan)
+				go channel.handleChannelCloseReport()
 			}
 		case <-channel.manualDisconnectionReportChan:
 			break
@@ -149,4 +160,18 @@ func (channel *Channel) UpdateChannelStatus(status bool) {
 	for _, ch := range channel.registeredChansForChannelStatus {
 		ch <- status
 	}
+}
+
+/*
+	Waiting till there will be a channel close report,
+	and then update the watchdog so he will be able to create
+	a new channel.
+	This is blocking, so run on different goroutine!
+*/
+func (channel *Channel) handleChannelCloseReport() {
+	err := <-channel.closingReportAmqpChan
+
+	glog.Warning("RabbitMQ reported on a channel failure (because disconnection or some other reason). Error ", err)
+
+	channel.closingReportChan <- true
 }
