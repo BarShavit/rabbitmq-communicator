@@ -7,14 +7,14 @@ import (
 )
 
 type Channel struct {
-	connection                    Connection
-	channel                       *amqp.Channel
-	durationAfterCreationFailure  time.Duration
-	closingReportChan             chan *amqp.Error
-	manualDisconnectionReportChan chan bool
-	ChannelStatus                 chan bool
-	connectionStatusChan          chan bool
-	IsCreated                     bool
+	connection                      Connection
+	channel                         *amqp.Channel
+	durationAfterCreationFailure    time.Duration
+	closingReportChan               chan *amqp.Error
+	manualDisconnectionReportChan   chan bool
+	registeredChansForChannelStatus []chan bool
+	connectionStatusChan            chan bool
+	IsCreated                       bool
 }
 
 /*
@@ -76,7 +76,7 @@ func (channel *Channel) createInnerChannel() bool {
 	channel.channel = ch
 
 	channel.IsCreated = true
-	channel.ChannelStatus <- true
+	channel.UpdateChannelStatus(true)
 
 	glog.Info("Created a channel.")
 
@@ -122,7 +122,7 @@ func (channel *Channel) watchChannel() {
 		case err := <-channel.closingReportChan:
 			glog.Warning("RabbitMQ reported on a channel failure (because disconnection or some other reason). Error %v", err)
 			channel.IsCreated = false
-			channel.ChannelStatus <- false
+			channel.UpdateChannelStatus(false)
 			go channel.reliableCreateChannel()
 		case reconnected := <-channel.connectionStatusChan:
 			if reconnected {
@@ -131,5 +131,22 @@ func (channel *Channel) watchChannel() {
 		case <-channel.manualDisconnectionReportChan:
 			break
 		}
+	}
+}
+
+/*
+	Register a client for channel status updates.
+	If something happen to the channel, it will update the clients.
+*/
+func (channel *Channel) NotifyChannelStatus(registerChan chan bool) {
+	channel.registeredChansForChannelStatus = append(channel.registeredChansForChannelStatus, registerChan)
+}
+
+/*
+	Update all the registered channels on the new channel status
+*/
+func (channel *Channel) UpdateChannelStatus(status bool) {
+	for _, ch := range channel.registeredChansForChannelStatus {
+		ch <- status
 	}
 }

@@ -28,7 +28,7 @@ type TopicExchangeSender struct {
 	exchangeName                  string
 	isDurable                     bool
 	manualDisconnectionReportChan chan bool
-	connectionChangeChan          chan bool
+	channelStatusChangeChan       chan bool
 }
 
 /*
@@ -43,7 +43,7 @@ func NewTopicExchangeSender(exchangeName string, isDurable bool, channel *Channe
 		exchangeName:                  exchangeName,
 		isDurable:                     isDurable,
 		manualDisconnectionReportChan: make(chan bool),
-		connectionChangeChan:          make(chan bool),
+		channelStatusChangeChan:       make(chan bool),
 	}
 
 	return &sender
@@ -105,11 +105,11 @@ func (exchange *TopicExchangeSender) reliableCreateExchange() {
 */
 func (exchange *TopicExchangeSender) watchExchangeDeclaration() {
 	exchange.channel.connection.NotifyManualDisconnection(exchange.manualDisconnectionReportChan)
-	exchange.channel.connection.NotifyConnectionChange(exchange.connectionChangeChan)
+	exchange.channel.NotifyChannelStatus(exchange.channelStatusChangeChan)
 
 	for {
 		select {
-		case connState := <-exchange.connectionChangeChan:
+		case connState := <-exchange.channelStatusChangeChan:
 			if connState {
 				go exchange.reliableCreateExchange()
 			}
