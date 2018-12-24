@@ -33,7 +33,7 @@ func NewChannel(conn Connection, durationAfterFaliure time.Duration) *Channel {
 		durationAfterFaliure,
 		make(chan *amqp.Error),
 		make(chan bool),
-		make(chan bool),
+		[]chan bool{},
 		make(chan bool),
 		false,
 	}

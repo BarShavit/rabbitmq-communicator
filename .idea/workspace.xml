@@ -191,6 +191,22 @@
       </list>
     </option>
   </component>
+  <component name="RunManager">
+    <configuration name="go build channel.go connection.go receiver.go sender.go" type="GoApplicationRunConfiguration" factoryName="Go Application" temporary="true" nameIsGenerated="true">
+      <module name="rabbitmq-communicator" />
+      <working_directory value="$PROJECT_DIR$/" />
+      <kind value="FILE" />
+      <filePath value="$PROJECT_DIR$/channel.go|$PROJECT_DIR$/connection.go|$PROJECT_DIR$/receiver.go|$PROJECT_DIR$/sender.go" />
+      <package value="rabbitmq-communicator" />
+      <directory value="$PROJECT_DIR$/" />
+      <method v="2" />
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Go Build.go build channel.go connection.go receiver.go sender.go" />
+      </list>
+    </recent_temporary>
+  </component>
   <component name="ToolWindowManager">
     <frame x="-8" y="-8" width="1382" height="744" extended-state="6" />
     <editor active="true" />
