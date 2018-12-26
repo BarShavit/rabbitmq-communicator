@@ -100,7 +100,6 @@ func (channel *Channel) reliableCreateChannel() {
 
 	for channel.connection.IsConnected && !channel.IsCreated && !channel.createInnerChannel() {
 		time.Sleep(channel.durationAfterCreationFailure)
-		glog.Info("test")
 	}
 }
 
@@ -127,6 +126,7 @@ func (channel *Channel) watchChannel() {
 		case _ = <-channel.closingReportChan:
 			channel.IsCreated = false
 			_ = channel.channel.Close()
+			time.Sleep(channel.durationAfterCreationFailure)
 			go channel.UpdateChannelStatus(false)
 			go channel.reliableCreateChannel()
 		case reconnected := <-channel.connectionStatusChan:

@@ -18,6 +18,7 @@ type Connection struct {
 	ConnectionStatus                []chan bool
 	disconnectChannel               chan bool
 	connectionErrorChan             chan *amqp.Error
+	connectionErrorSelfChan         chan *amqp.Error
 	registeredDisconnectionChannels []chan bool
 }
 
@@ -36,14 +37,14 @@ type Connection struct {
 */
 func NewConnection(ip string, port int, user string, pass string, reconnectInterval time.Duration) *Connection {
 	var connection = Connection{
-		serverIp:            ip,
-		port:                port,
-		userName:            user,
-		password:            pass,
-		reconnectInterval:   reconnectInterval,
-		IsConnected:         false,
-		disconnectChannel:   make(chan bool),
-		connectionErrorChan: make(chan *amqp.Error),
+		serverIp:                ip,
+		port:                    port,
+		userName:                user,
+		password:                pass,
+		reconnectInterval:       reconnectInterval,
+		IsConnected:             false,
+		disconnectChannel:       make(chan bool),
+		connectionErrorSelfChan: make(chan *amqp.Error),
 	}
 
 	// Register myself for manual disconnection reports
@@ -53,7 +54,7 @@ func NewConnection(ip string, port int, user string, pass string, reconnectInter
 	go connection.reliableConnect()
 
 	// Start connection watchdog
-	connection.ConnectionWatchdog()
+	go connection.ConnectionWatchdog()
 
 	return &connection
 }
@@ -74,7 +75,7 @@ func (connection *Connection) connect() bool {
 
 	url := fmt.Sprintf("amqp://%s:%s@%s:%v/", connection.userName, connection.password, connection.serverIp, connection.port)
 
-	glog.Info("Trying to log to RabbitMQ in %s", url)
+	glog.Info("Trying to log to RabbitMQ in ", url)
 
 	conn, err := amqp.Dial(url)
 
@@ -90,6 +91,10 @@ func (connection *Connection) connect() bool {
 	// Update the clients
 	connection.IsConnected = true
 	connection.UpdateConnectionUpdate(true)
+
+	connection.connectionErrorChan = make(chan *amqp.Error)
+	connection.connection.NotifyClose(connection.connectionErrorChan)
+	go connection.handleReportedError()
 
 	return true
 }
@@ -120,19 +125,13 @@ func (connection *Connection) reliableConnect() {
 	and won't act our-self.
 */
 func (connection *Connection) ConnectionWatchdog() {
-	if connection.connection == nil {
-		time.Sleep(connection.reconnectInterval)
-		go connection.ConnectionWatchdog()
-		return
-	}
-
-	connection.connection.NotifyClose(connection.connectionErrorChan)
-
 	for {
 		select {
-		case err := <-connection.connectionErrorChan:
-			glog.Error("Disconnected from RabbitMQ. Trying to reconnect. Error: %v", err)
+		case err := <-connection.connectionErrorSelfChan:
+			glog.Error("Disconnected from RabbitMQ. Trying to reconnect. Error: ", err)
+			connection.IsConnected = false
 			connection.UpdateConnectionUpdate(false)
+			time.Sleep(connection.reconnectInterval)
 			connection.reliableConnect()
 		case <-connection.disconnectChannel:
 			connection.Disconnect()
@@ -186,4 +185,14 @@ func (connection *Connection) UpdateConnectionUpdate(status bool) {
 	for _, ch := range connection.ConnectionStatus {
 		ch <- status
 	}
+}
+
+/*
+	When we receive a error message, move it to our error report chan
+	so we will be able to handle it as we want.
+	It's a blocking method!
+*/
+func (connection *Connection) handleReportedError() {
+	err := <-connection.connectionErrorChan
+	connection.connectionErrorSelfChan <- err
 }
